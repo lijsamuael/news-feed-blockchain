@@ -1,0 +1,17 @@
+entity user {
+  mutable name;
+  key id: byte_array;
+  key account;
+}
+
+entity follower {
+  index user;
+  index follower: user;
+  key user, follower;
+}
+
+entity post {
+  timestamp = op_context.last_block_time;
+  index user;
+  content: text;
+}

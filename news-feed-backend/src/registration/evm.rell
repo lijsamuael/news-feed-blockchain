@@ -1,0 +1,19 @@
+namespace evm {
+    query get_register_message(evm_address: byte_array) =
+        "Create account for EVM wallet:\n%s"
+        .format(evm_address.to_hex().lower_case());
+
+    function create_account_from_evm(evm_address: byte_array, signature): account {
+        val register_msg = get_register_message(evm_address);
+        val recovered_address = _recover_eth_address(register_msg, signature);
+        require(recovered_address == evm_address, "Signature not valid for the provided key");
+
+        val auth_descriptor = auth_descriptor(
+            auth_type = auth_type.ES,
+            args = [["A"].to_gtv(), evm_address.to_gtv()],
+            rules = null.to_gtv()
+        );
+        val accountId = Unsafe.create_account_with_auth(auth_descriptor);
+        return account @ { accountId };
+    }
+}

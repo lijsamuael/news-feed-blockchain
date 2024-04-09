@@ -1,0 +1,154 @@
+module;
+
+import lib.ft4.accounts.{ account, single_sig_auth_descriptor, Unsafe };
+
+import news_feed.*;
+import registration.*;
+
+
+@extend(auth.auth_handler)
+function () = auth.add_auth_handler(
+  flags = ["MySession"]
+);
+
+
+//user table
+entity user {
+  mutable name;
+  key id: byte_array;
+  key account;
+}
+
+
+//an operation to create a new user
+operation create_user(name, pubkey) {
+  val account_id = Unsafe.create_account_with_auth(single_sig_auth_descriptor(pubkey, set(["MySession"])));
+  create user (name, pubkey, account @ { account_id });
+}
+
+
+//query to fetch the username of the users
+query get_user_name(user_id: byte_array): text {
+  return user @ { user_id } ("%s#%s".format(.name, .id.to_hex().sub(0, 5)));
+}
+
+//a queris to find the number of followers and the number of people that a user follower
+query get_followers_count(user_id: byte_array): integer {
+  return follower @ { .user == user @ { user_id } } (@sum 1);
+}
+
+query get_following_count(user_id: byte_array): integer {
+  return follower @ { .follower == user @ { user_id } } (@sum 1);
+}
+
+query is_following(user_id: byte_array, follower_id: byte_array) =
+  exists(follower @? { .user.id == user_id, .follower.id == follower_id });
+
+
+//get all users
+query get_users(pointer: integer, n_users: integer) {
+  val users = user @* {} (name = "%s#%s".format(.name, .id.to_hex().sub(0, 5)), id = .id) offset pointer limit n_users;
+  return (
+    pointer = pointer + users.size(),
+    users = users
+  );
+}
+
+
+
+
+
+
+//codes related to the creation updataion and deletion of followers
+
+
+//folower table
+entity follower {
+  index user: user;
+  index follower: user;
+  key user, follower;
+}
+
+//an operation to create a follower
+operation follow_user(follow_id: byte_array) {
+  val account = auth.authenticate();
+  val user = user @ { account };
+  val follow = require_user(follow_id);
+  create follower ( user = follow, follower = user );
+}
+
+//an opearation to delete a follower
+operation unfollow_user(unfollow_id: byte_array) {
+  val account = auth.authenticate();
+  val user = user @ { account };
+  val follow = require_user(unfollow_id);
+  delete follower @? { .user == follow, .follower == user };
+}
+
+
+
+
+
+
+
+//codes related to the operations of posts
+
+//post table
+entity post {
+  timestamp = op_context.last_block_time;
+  index user;
+  content: text;
+}
+
+
+//an operation to create a post
+operation make_post(content: text) {
+  val account = auth.authenticate();
+  require(content.size() <= 255, "A post cannot be longer than 255 letters");
+  val user = user @ { account };
+  create post ( user, content );
+}
+
+
+
+
+//
+struct post_dto {
+  timestamp;
+  user: struct<user>;
+  content: text;
+}
+
+
+query get_posts(
+  user_id: byte_array,
+  pointer: integer,
+  n_posts: integer
+): (pointer: integer, posts: list<post_dto>) {
+  val posts = (user, follower, post) @* {
+    user.id == user_id,
+    follower.follower == user,
+    post.user == follower.user
+  } (
+    @sort_desc @omit post.rowid,
+    post_dto(
+        post.timestamp,
+        post.content,
+        user = post.user.to_struct()
+    )
+  ) offset pointer limit n_posts;
+
+  return (
+    pointer = pointer + posts.size(),
+    posts = posts
+  );
+}
+
+
+
+//input validation
+function require_is_signer(pubkey) = require(op_context.is_signer(pubkey), "User must sign this operation");
+
+
+
+function require_user(id: byte_array) = require(user @? { id }, "User with id %b does not exist".format(id));
